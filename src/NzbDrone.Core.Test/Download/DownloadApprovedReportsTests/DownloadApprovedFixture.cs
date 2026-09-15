@@ -87,8 +87,9 @@ namespace NzbDrone.Core.Test.Download.DownloadApprovedReportsTests
             result.Grabbed.Should().HaveCount(1);
             result.Pending.Should().BeEmpty();
             Mocker.GetMock<IDownloadService>().Verify(v => v.DownloadReport(best, null), Times.Once());
-            Mocker.GetMock<IPendingReleaseService>().Verify(v => v.AddMany(It.Is<List<Tuple<DownloadDecision, PendingReleaseReason>>>(l =>
-                l.Count == 1 && l[0].Item1.RemoteMovie == runnerUp && l[0].Item2 == PendingReleaseReason.FailedDownloadFallback)), Times.Once());
+            Mocker.GetMock<IPendingReleaseService>()
+                  .Verify(v => v.AddMany(It.Is<List<Tuple<DownloadDecision, PendingReleaseReason>>>(l => l.Count == 1 && l[0].Item1.RemoteMovie == runnerUp && l[0].Item2 == PendingReleaseReason.FailedDownloadFallback)),
+                          Times.Once());
         }
 
         [Test]
