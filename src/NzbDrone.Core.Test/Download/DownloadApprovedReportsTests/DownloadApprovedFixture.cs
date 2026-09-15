@@ -72,6 +72,42 @@ namespace NzbDrone.Core.Test.Download.DownloadApprovedReportsTests
         }
 
         [Test]
+        public async Task should_store_approved_runner_ups_as_failed_download_fallback()
+        {
+            var movie = GetMovie(1);
+            var best = GetRemoteMovie(new QualityModel(Quality.HDTV1080p), movie);
+            var runnerUp = GetRemoteMovie(new QualityModel(Quality.HDTV720p), movie);
+
+            var decisions = new List<DownloadDecision>();
+            decisions.Add(new DownloadDecision(best));
+            decisions.Add(new DownloadDecision(runnerUp));
+
+            var result = await Subject.ProcessDecisions(decisions);
+
+            result.Grabbed.Should().HaveCount(1);
+            result.Pending.Should().BeEmpty();
+            Mocker.GetMock<IDownloadService>().Verify(v => v.DownloadReport(best, null), Times.Once());
+            Mocker.GetMock<IPendingReleaseService>().Verify(v => v.AddMany(It.Is<List<Tuple<DownloadDecision, PendingReleaseReason>>>(l =>
+                l.Count == 1 && l[0].Item1.RemoteMovie == runnerUp && l[0].Item2 == PendingReleaseReason.FailedDownloadFallback)), Times.Once());
+        }
+
+        [Test]
+        public async Task should_cap_failed_download_fallbacks_per_movie()
+        {
+            var movie = GetMovie(1);
+            var decisions = new List<DownloadDecision>();
+
+            for (var i = 0; i < 15; i++)
+            {
+                decisions.Add(new DownloadDecision(GetRemoteMovie(new QualityModel(Quality.HDTV720p), movie)));
+            }
+
+            await Subject.ProcessDecisions(decisions);
+
+            Mocker.GetMock<IPendingReleaseService>().Verify(v => v.AddMany(It.Is<List<Tuple<DownloadDecision, PendingReleaseReason>>>(l => l.Count == 10)), Times.Once());
+        }
+
+        [Test]
         public async Task should_download_report_if_movie_was_not_already_downloaded()
         {
             var remoteMovie = GetRemoteMovie(new QualityModel(Quality.HDTV720p));

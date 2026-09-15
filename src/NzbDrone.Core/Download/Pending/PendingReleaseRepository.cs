@@ -33,7 +33,7 @@ namespace NzbDrone.Core.Download.Pending
         {
             var builder = new SqlBuilder(_database.DatabaseType)
                 .InnerJoin<PendingRelease, Movie>((p, m) => p.MovieId == m.Id)
-                .Where<PendingRelease>(p => p.Reason != PendingReleaseReason.Fallback);
+                .Where<PendingRelease>(p => p.Reason != PendingReleaseReason.Fallback && p.Reason != PendingReleaseReason.FailedDownloadFallback);
 
             return Query(builder);
         }

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using NLog;
 using NzbDrone.Core.Configuration;
+using NzbDrone.Core.Download.Fallback;
 using NzbDrone.Core.IndexerSearch;
 using NzbDrone.Core.Messaging;
 using NzbDrone.Core.Messaging.Commands;
@@ -13,14 +14,17 @@ namespace NzbDrone.Core.Download
     {
         private readonly IConfigService _configService;
         private readonly IManageCommandQueue _commandQueueManager;
+        private readonly IFailedDownloadFallbackService _fallbackService;
         private readonly Logger _logger;
 
         public RedownloadFailedDownloadService(IConfigService configService,
                                                IManageCommandQueue commandQueueManager,
+                                               IFailedDownloadFallbackService fallbackService,
                                                Logger logger)
         {
             _configService = configService;
             _commandQueueManager = commandQueueManager;
+            _fallbackService = fallbackService;
             _logger = logger;
         }
 
@@ -42,6 +46,15 @@ namespace NzbDrone.Core.Download
             if (message.ReleaseSource == ReleaseSourceType.InteractiveSearch && !_configService.AutoRedownloadFailedFromInteractiveSearch)
             {
                 _logger.Debug("Auto redownloading failed movies from interactive search is disabled");
+                return;
+            }
+
+            // Fork: grab a cached runner-up release instead of searching all indexers again
+            if (message.MovieId != 0 && _fallbackService.HasCandidates(message.MovieId))
+            {
+                _logger.Debug("Cached fallback releases available, grabbing next best instead of searching");
+                _commandQueueManager.Push(new FailedDownloadFallbackCommand(message.MovieId));
+
                 return;
             }
 

@@ -19,6 +19,8 @@ namespace NzbDrone.Core.Download
 
     public class ProcessDownloadDecisions : IProcessDownloadDecisions
     {
+        private const int MaxFallbacksPerMovie = 10;
+
         private readonly IDownloadService _downloadService;
         private readonly IPrioritizeDownloadDecision _prioritizeDownloadDecision;
         private readonly IPendingReleaseService _pendingReleaseService;
@@ -55,6 +57,12 @@ namespace NzbDrone.Core.Download
                 // Skip if already grabbed
                 if (IsMovieProcessed(grabbed, report))
                 {
+                    // Fork: keep approved runner-ups so a failed download can grab the next best without searching again
+                    if (report.Approved && CountFallbacksForMovie(pendingAddQueue, report) < MaxFallbacksPerMovie)
+                    {
+                        pendingAddQueue.Add(Tuple.Create(report, PendingReleaseReason.FailedDownloadFallback));
+                    }
+
                     continue;
                 }
 
@@ -172,6 +180,13 @@ namespace NzbDrone.Core.Download
                             .Select(e => e.Id)
                             .ToList()
                             .Contains(movieId);
+        }
+
+        private int CountFallbacksForMovie(List<Tuple<DownloadDecision, PendingReleaseReason>> queue, DownloadDecision report)
+        {
+            var movieId = report.RemoteMovie.Movie.Id;
+
+            return queue.Count(q => q.Item2 == PendingReleaseReason.FailedDownloadFallback && q.Item1.RemoteMovie.Movie.Id == movieId);
         }
 
         private void PreparePending(List<Tuple<DownloadDecision, PendingReleaseReason>> queue, List<DownloadDecision> grabbed, List<DownloadDecision> pending, DownloadDecision report, PendingReleaseReason reason)

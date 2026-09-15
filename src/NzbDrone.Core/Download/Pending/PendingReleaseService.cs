@@ -146,7 +146,7 @@ namespace NzbDrone.Core.Download.Pending
 
         public List<ReleaseInfo> GetPending()
         {
-            var releases = _repository.All().Select(p =>
+            var releases = _repository.All().Where(p => p.Reason != PendingReleaseReason.FailedDownloadFallback).Select(p =>
             {
                 var release = p.Release;
 
