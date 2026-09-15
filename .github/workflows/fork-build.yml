@@ -156,7 +156,7 @@ jobs:
             mkdir -p "${folder}"
             cp -r "_output/${FRAMEWORK}/${rid}/publish/." "${folder}"
             cp -r _output/UI "${folder}/UI"
-            cp LICENSE.md "${folder}"
+            cp LICENSE "${folder}"
 
             rm -f "${folder}"/ServiceUninstall.* "${folder}"/ServiceInstall.* "${folder}"/Radarr.Windows.*
             du -sh "${folder}"
