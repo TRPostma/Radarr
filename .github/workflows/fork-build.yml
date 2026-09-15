@@ -1,0 +1,209 @@
+# Fork automation: keeps the `fallback-grab` patch branch rebased on upstream Radarr and publishes a
+# Docker image (linuxserver.io base + this fork's binaries) to GHCR whenever upstream ships a new
+# version or the patch changes. Runs daily; a rebase conflict fails the run so you get an email.
+name: Fork build
+
+on:
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild and republish even if this upstream version + patch is already published
+        type: boolean
+        default: false
+  push:
+    branches:
+      - fallback-grab
+    paths-ignore:
+      - "FORK.md"
+      - "README.md"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: fork-build
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: Radarr/Radarr
+  UPSTREAM_BRANCH: master
+  PATCH_BRANCH: fallback-grab
+  FRAMEWORK: net8.0
+  BASE_IMAGE: lscr.io/linuxserver/radarr:latest
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out patch branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PATCH_BRANCH }}
+          fetch-depth: 0
+
+      - name: Rebase patch branch onto upstream
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --tags upstream "${UPSTREAM_BRANCH}"
+
+          before=$(git rev-parse HEAD)
+
+          if ! git rebase "upstream/${UPSTREAM_BRANCH}"; then
+            git rebase --abort
+            echo "::error::Rebasing ${PATCH_BRANCH} onto upstream/${UPSTREAM_BRANCH} hit a conflict. Rebase locally, resolve, force-push ${PATCH_BRANCH}, then re-run this workflow."
+            exit 1
+          fi
+
+          after=$(git rev-parse HEAD)
+
+          if [ "$before" != "$after" ]; then
+            echo "Upstream moved, pushing rebased ${PATCH_BRANCH}"
+            git push --force-with-lease origin "HEAD:${PATCH_BRANCH}"
+          else
+            echo "Patch branch already up to date with upstream/${UPSTREAM_BRANCH}"
+          fi
+
+          upstream_tag=$(git describe --tags --abbrev=0 --match 'v*' "upstream/${UPSTREAM_BRANCH}")
+          version="${upstream_tag#v}"
+          patch_sha=$(git rev-parse --short HEAD)
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "patch_sha=${patch_sha}" >> "$GITHUB_OUTPUT"
+          echo "build_id=${version}-${patch_sha}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/radarr" >> "$GITHUB_OUTPUT"
+
+          echo "Upstream ${upstream_tag}, patch ${patch_sha}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check whether this build is already published
+        id: check
+        shell: bash
+        env:
+          IMAGE: ${{ steps.sync.outputs.image }}
+          BUILD_ID: ${{ steps.sync.outputs.build_id }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "${FORCE}" != "true" ] && docker buildx imagetools inspect "${IMAGE}:${BUILD_ID}" >/dev/null 2>&1; then
+            echo "${IMAGE}:${BUILD_ID} already exists, nothing to build"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup .NET
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Setup Node (Volta)
+        if: steps.check.outputs.skip != 'true'
+        uses: volta-cli/action@v4
+
+      - name: Stamp version
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        env:
+          RADARR_VERSION: ${{ steps.sync.outputs.version }}
+        run: |
+          echo "Stamping version ${RADARR_VERSION} (${UPSTREAM_BRANCH})"
+          sed -i'' -e "s/<AssemblyVersion>[0-9.*]\+<\/AssemblyVersion>/<AssemblyVersion>${RADARR_VERSION}<\/AssemblyVersion>/g" src/Directory.Build.props
+          sed -i'' -e "s/<AssemblyConfiguration>[\$()A-Za-z-]\+<\/AssemblyConfiguration>/<AssemblyConfiguration>${UPSTREAM_BRANCH}<\/AssemblyConfiguration>/g" src/Directory.Build.props
+
+      - name: Build backend (linux-musl x64 + arm64)
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for rid in linux-musl-x64 linux-musl-arm64; do
+            echo "::group::Building ${rid}"
+            dotnet msbuild -restore src/Radarr.sln -p:SelfContained=True -p:Configuration=Release -p:Platform=Posix -p:RuntimeIdentifiers=${rid} -t:PublishAllRids
+            echo "::endgroup::"
+          done
+
+      - name: Build frontend
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          yarn install --frozen-lockfile --network-timeout 120000
+          yarn build --env production
+
+      - name: Assemble runtime folders
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in amd64:linux-musl-x64 arm64:linux-musl-arm64; do
+            arch=${pair%%:*}
+            rid=${pair##*:}
+            folder=_artifacts/${arch}/Radarr
+
+            mkdir -p "${folder}"
+            cp -r "_output/${FRAMEWORK}/${rid}/publish/." "${folder}"
+            cp -r _output/UI "${folder}/UI"
+            cp LICENSE.md "${folder}"
+
+            rm -f "${folder}"/ServiceUninstall.* "${folder}"/ServiceInstall.* "${folder}"/Radarr.Windows.*
+            du -sh "${folder}"
+          done
+
+      - name: Set up QEMU
+        if: steps.check.outputs.skip != 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        if: steps.check.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: _artifacts
+          file: docker/fork/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE }}
+            RADARR_VERSION=${{ steps.sync.outputs.version }}
+            PATCH_SHA=${{ steps.sync.outputs.patch_sha }}
+          tags: |
+            ${{ steps.sync.outputs.image }}:latest
+            ${{ steps.sync.outputs.image }}:${{ steps.sync.outputs.version }}
+            ${{ steps.sync.outputs.image }}:${{ steps.sync.outputs.build_id }}
+          labels: |
+            org.opencontainers.image.title=Radarr (fallback-grab fork)
+            org.opencontainers.image.description=Radarr ${{ steps.sync.outputs.version }} with cached fallback grabs for failed downloads
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.sync.outputs.build_id }}
+            org.opencontainers.image.revision=${{ steps.sync.outputs.patch_sha }}
+
+      - name: Summary
+        if: always()
+        shell: bash
+        env:
+          IMAGE: ${{ steps.sync.outputs.image }}
+          BUILD_ID: ${{ steps.sync.outputs.build_id }}
+          SKIP: ${{ steps.check.outputs.skip }}
+        run: |
+          {
+            echo "## Fork build"
+            echo
+            echo "- Image: \`${IMAGE}:${BUILD_ID}\` (also \`:latest\`)"
+            if [ "${SKIP}" = "true" ]; then echo "- Already published, build skipped"; fi
+          } >> "$GITHUB_STEP_SUMMARY"

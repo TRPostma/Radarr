@@ -1,5 +1,17 @@
 # Radarr
 
+> ## This is a fork: cached fallback grabs for failed downloads
+>
+> This fork adds one feature on top of upstream Radarr and otherwise tracks upstream `master`
+> automatically. **When a grab succeeds, the other approved releases from that search or RSS pass
+> are cached. If the download later fails, Radarr grabs the next best cached release instead of
+> searching all indexers again and re-running the whole decision engine.** The normal search only
+> happens when nothing usable is cached.
+>
+> - Docker image (drop-in replacement for `lscr.io/linuxserver/radarr`): `ghcr.io/trpostma/radarr:latest`
+> - Details, image tags and how the daily upstream rebase works: [FORK.md](FORK.md)
+> - Patch branch: `fallback-grab`; everything else is unmodified upstream Radarr
+
 [![Build Status](https://dev.azure.com/Radarr/Radarr/_apis/build/status/Radarr.Radarr?branchName=develop)](https://dev.azure.com/Radarr/Radarr/_build/latest?definitionId=1&branchName=develop)
 [![Translation status](https://translate.servarr.com/widget/servarr/radarr/svg-badge.svg)](https://translate.servarr.com/engage/servarr/?utm_source=widget)
 [![Docker Pulls](https://img.shields.io/docker/pulls/linuxserver/radarr.svg)](https://wiki.servarr.com/radarr/installation/docker)
