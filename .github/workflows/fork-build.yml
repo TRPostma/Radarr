@@ -43,6 +43,10 @@ jobs:
         with:
           ref: ${{ env.PATCH_BRANCH }}
           fetch-depth: 0
+          # Optional fine-grained PAT (Contents + Workflows: write) so the rebased branch can be pushed
+          # even when upstream changed a workflow file. Without it the build still runs from the
+          # rebased tree; only the branch on GitHub stays behind.
+          token: ${{ secrets.FORK_PUSH_TOKEN || github.token }}
 
       - name: Rebase patch branch onto upstream
         id: sync
@@ -67,14 +71,19 @@ jobs:
 
           if [ "$before" != "$after" ]; then
             echo "Upstream moved, pushing rebased ${PATCH_BRANCH}"
-            git push --force-with-lease origin "HEAD:${PATCH_BRANCH}"
+            if ! git push --force-with-lease origin "HEAD:${PATCH_BRANCH}"; then
+              echo "::warning::Could not push the rebased ${PATCH_BRANCH} (usually because upstream changed a workflow file and the default token may not push those). Building from the rebased tree anyway. Add a FORK_PUSH_TOKEN secret to fix the push."
+            fi
           else
             echo "Patch branch already up to date with upstream/${UPSTREAM_BRANCH}"
           fi
 
           upstream_tag=$(git describe --tags --abbrev=0 --match 'v*' "upstream/${UPSTREAM_BRANCH}")
           version="${upstream_tag#v}"
-          patch_sha=$(git rev-parse --short HEAD)
+          # Rebasing rewrites commit ids every run, so identify a build by upstream commit + patch content
+          upstream_sha=$(git rev-parse --short "upstream/${UPSTREAM_BRANCH}")
+          patch_id=$(git diff "upstream/${UPSTREAM_BRANCH}" HEAD | git patch-id --stable | cut -c1-8)
+          patch_sha="${upstream_sha}-${patch_id}"
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "patch_sha=${patch_sha}" >> "$GITHUB_OUTPUT"

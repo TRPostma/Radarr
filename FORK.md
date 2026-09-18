@@ -47,7 +47,7 @@ services:
     # ...same environment, volumes and ports as before
 ```
 
-Tags: `latest`, `<upstream version>` (e.g. `6.4.4.10684`) and `<upstream version>-<patch sha>`.
+Tags: `latest`, `<upstream version>` (e.g. `6.4.4.10684`) and `<upstream version>-<upstream commit>-<patch id>`.
 
 If the GHCR package is private, run `docker login ghcr.io` on the host with a GitHub token that has
 `read:packages`, or make the package public under
